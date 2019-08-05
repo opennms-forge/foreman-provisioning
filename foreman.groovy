@@ -6,7 +6,7 @@ import java.util.logging.Logger
 String username = config.getString("username")
 String password = config.getString("password")
 String urlbase = config.getString("foremanapi")
-String hostgroupFilter = config.getString("hostgroupfilter") * /
+String hostgroupFilter = config.getString("hostgroupfilter")
 
 Logger logger = Logger.getLogger("")
 
@@ -123,8 +123,7 @@ for (result in hostlist.results) {
         def catList = paramslist.all_parameters.findAll{it -> it.name in['pconsole_env', 'pconsole_stack']}.collect{it -> new RequisitionCategory(it.value)};
         requisitionNode.getCategories().addAll(catList);
         requisition.getNodes().add(requisitionNode);
- */
-     }   
+ */  
 }
 
 return requisition
