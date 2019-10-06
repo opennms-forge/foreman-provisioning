@@ -6,6 +6,7 @@ The script can be used with PRIS script source to query Foremans API for host in
 
 * The script grabs hosts by hostgroups and location and put them into a requisition
 * The asset fields CPU, memory, manufacturer, productname, serialnumber, operatingsystem, description are filled with Puppet facts
+* The script is able to grab fact values to use them as categories. Currently this is static. So fact `stack` contains in our environment `department1`, `department2` etc. and `umbworld` `pro` or `dev`. The fact value `is_virtual` is used to determine, if the host is virtual or physical and set a corresponding category.
 * Service binding on interfaces is not possible since Foreman does not have a logic for that. So service discovery is required for each `foreignSource` or the default `foreignSource`.
 
 # Howto set it up
@@ -16,7 +17,6 @@ The script can be used with PRIS script source to query Foremans API for host in
 
 The requisition config is quite simple.
 The variable values will be used in the script.
-
 
 ```
 source = script
@@ -39,6 +39,7 @@ The script requires some libraries which are not provided by default. Basically 
 These libs have to be stored in PRIS' lib folder:
 
 gpars: https://mvnrepository.com/artifact/org.codehaus.gpars/gpars/1.2.1
+
 ivy: https://mvnrepository.com/artifact/org.apache.ivy/ivy/2.4.0
 
 ## OpenNMS 

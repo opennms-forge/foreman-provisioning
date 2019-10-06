@@ -149,7 +149,7 @@ def getNodeForHost(result) {
     requisitionNode.getAssets().addAll(assetList)
 
     // Grabs fact values and uses them for OpenNMS node categories.
-    def catList = getCatList(aResult, "proemion_stack","proemion_umbworld", "is_virtual" );
+    def catList = getCatList(aResult, "stack","umbworld", "is_virtual" );
 
     requisitionNode.getCategories().addAll(catList);
     return requisitionNode;
