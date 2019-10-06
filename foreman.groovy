@@ -1,129 +1,165 @@
 import groovy.json.JsonSlurper
+import groovy.transform.Field
+import groovyx.gpars.GParsPool
 import org.opennms.pris.model.*
 import java.util.logging.Logger
 
-// definitions filled out from requisition.properties
-String username = config.getString("username")
-String password = config.getString("password")
-String urlbase = config.getString("foremanapi")
-String hostgroupFilter = config.getString("hostgroupfilter")
+@Field Logger logger = Logger.getLogger("foreman")
+@Field String username = config.getString("username")
+@Field String password = config.getString("password")
+@Field String urlbase = config.getString("foremanapi")
+@Field String hostgroupFilter = config.getString("hostgroupfilter")
+@Field String requisitionName = config.getString("reqname")
+@Field String hostLocation = config.getString("hostLocation")
 
-Logger logger = Logger.getLogger("")
+@Field String url = urlbase + 'hosts?per_page=1000'
+@Field String authentication = "${username}:${password}".bytes.encodeBase64().toString()
 
-String per_page = "?per_page="
-String url = urlbase + 'hosts' + per_page + '1000'
-String authentication = "${username}:${password}".bytes.encodeBase64().toString()
-connection = url.toURL().openConnection()
-connection.addRequestProperty("Authorization", "Basic ${authentication}")
-connection.setRequestMethod("GET")
-connection.doOutput = false
-connection.connect()
+final Requisition requisition = new Requisition();
+requisition.setForeignSource(requisitionName);
 
-def hostlist = new JsonSlurper().parseText(connection.content.text)
-int i = 0;
-Requisition requisition = new Requisition()
+long startTime = System.currentTimeMillis();
 
-// definition filled out from requisition.properties
-def reqname = config.getString("reqname")
-//create foreignSource
-requisition.setForeignSource(reqname)
+def hostList = new JsonSlurper().parseText(request(url));
 
-// for each host entry
-for (result in hostlist.results) {
-
- // fetch correct nodes in hostgroup
- if (result.ip == null) {
-  logger.info("no IP address set on: " + result.name);
-  continue;
- }
- logger.info('Starting with: ' + result.name);
- // create a new requisition node
- RequisitionNode requisitionNode = new RequisitionNode()
- // Set node label and foreign ID for the node
- requisitionNode.setNodeLabel(result.name)
- requisitionNode.setForeignId(result.id.toString())
- // create interface
- RequisitionInterface requisitionInterface = new RequisitionInterface();
- requisitionInterface.setIpAddr(result.ip);
- requisitionInterface.setSnmpPrimary(PrimaryType.PRIMARY);
- requisitionNode.getInterfaces().add(requisitionInterface);
- // create facts string and catch data
- String facturl = urlbase + 'hosts/' + result.id + '/facts' + per_page + '1000'
- connectionfacts = facturl.toURL().openConnection()
- connectionfacts.addRequestProperty("Authorization", "Basic ${authentication}")
- connectionfacts.setRequestMethod("GET")
- connectionfacts.doOutput = false
- connectionfacts.connect()
- def factlist = new JsonSlurper().parseText(connectionfacts.content.text)
- // create asset list
- List < RequisitionAsset > assetList = new ArrayList < RequisitionAsset > ()
- RequisitionAsset assetCpu = new RequisitionAsset()
- RequisitionAsset assetRam = new RequisitionAsset()
- RequisitionAsset assetManufacturer = new RequisitionAsset()
- RequisitionAsset assetProductname = new RequisitionAsset()
- RequisitionAsset assetSerialnumber = new RequisitionAsset()
- RequisitionAsset assetOperatingSystem = new RequisitionAsset()
- RequisitionAsset assetDescription = new RequisitionAsset()
-
- // grabbing Puppet facts
- def stuff = factlist.results.get(result.name)
- logger.info('Grabbing facts for: ' + result.name);
- if (stuff == null) {
-  logger.info("no facts for: " + result.name)
- } else {
-  // define asset and write value
-  assetCpu.setName("cpu")
-  assetCpu.setValue(factlist.results.get(result.name).get("processor0"))
-  assetRam.setName("ram")
-  assetRam.setValue(factlist.results.get(result.name).get("memorysize"))
-  assetManufacturer.setName("manufacturer")
-  assetManufacturer.setValue(factlist.results.get(result.name).get("manufacturer"))
-  assetProductname.setName("productname")
-  assetProductname.setValue(factlist.results.get(result.name).get("productname"))
-  assetSerialnumber.setName("serialnumber")
-  assetSerialnumber.setValue(factlist.results.get(result.name).get("serialnumber"))
-  assetLsbDescription = (factlist.results.get(result.name).get("lsbdistdescription"))
-  assetKernelrelease = (factlist.results.get(result.name).get("kernelrelease"))
-  assetDescription.setName("description")
-  assetDescription.setValue(result.comment)
-  assetOperatingSystem.setName("operatingsystem")
-  assetOperatingSystem.setValue(assetLsbDescription + ' ' + assetKernelrelease)
-  // add asset to list
-  assetList.add(assetCpu)
-  assetList.add(assetRam)
-  assetList.add(assetManufacturer)
-  assetList.add(assetProductname)
-  if (assetSerialnumber.value == null) {
-   logger.info("no serialnumber available: " + result.name);
-   assetSerialnumber.setValue("Not Specified")
-  }
-  assetList.add(assetSerialnumber)
-  assetList.add(assetOperatingSystem)
-  if (assetDescription) {
-   logger.info("no description available: " + result.name);
-   assetDescription.setValue("Not Specified")
-  }
-  assetList.add(assetDescription)
-  requisitionNode.getAssets().addAll(assetList)
- }
-
- /*
-        Additional code to grab the values of the
-        global parameters named pconsole_env and pconsole_stack
-        to create OpenNMS categories 
-        
-        String params = urlbase + 'hosts/' + result.id
-        connectionparams = params.toURL().openConnection()
-        connectionparams.addRequestProperty("Authorization", "Basic ${authentication}")
-        connectionparams.setRequestMethod("GET")
-        connectionparams.doOutput = false
-        connectionparams.connect()
-        def paramslist = new JsonSlurper().parseText(connectionparams.content.text)
-
-        def catList = paramslist.all_parameters.findAll{it -> it.name in['pconsole_env', 'pconsole_stack']}.collect{it -> new RequisitionCategory(it.value)};
-        requisitionNode.getCategories().addAll(catList);
-        requisition.getNodes().add(requisitionNode);
- */  
+GParsPool.withPool {
+    // parallel host query
+    hostList.results.eachParallel { result ->
+        requisition.getNodes().add(getNodeForHost(result))
+    }
 }
 
-return requisition
+logger.info("DONE in " + (System.currentTimeMillis() - startTime) + " ms");
+
+def valueOrNotSpecified(value) {
+    // null/empty checker. returns "Not specified" if true
+    return value != null && !value.toString().trim().isEmpty() ? value : "Not specified"
+}
+
+def request(String url) {
+    // API connection
+    long start = System.currentTimeMillis();
+    def connection = url.toURL().openConnection()
+    connection.addRequestProperty("Authorization", "Basic ${authentication}")
+    connection.setRequestMethod("GET")
+    connection.doOutput = false
+    connection.connect()
+    def text = connection.content.text;
+    logger.info("Request " + url + " took: " + (System.currentTimeMillis() - start) + " ms");
+    return text;
+}
+
+def getCatList(def aResult, String... names){
+    // fills category list
+    List<RequisitionCategory> cats = new ArrayList<>();
+    for (def name in names){
+        boolean isVirtual = name.equals("is_virtual");
+        if(isVirtual && aResult.get(name).equals("true")) {
+            name = "virtual";
+            cats.add(new RequisitionCategory(valueOrNotSpecified(name)));
+        } else if(isVirtual && aResult.get(name).equals("false")) {
+            name = "physical";
+            cats.add(new RequisitionCategory(valueOrNotSpecified(name)));
+        } else {
+            cats.add(new RequisitionCategory(valueOrNotSpecified(aResult.get(name))));
+        }
+    }
+    return cats;
+}
+
+def getNodeForHost(result) {
+    // fetch only nodes in defined hostgroup
+    if (result.hostgroup_title != hostgroupFilter) {
+        return;
+    }
+    // fetch only nodes in defined hostlocation
+    if (result.location_name != hostLocation) {
+        return;
+    }
+
+    logger.info('Starting with: ' + result.name);
+
+    // Create a new requisition node
+    RequisitionNode requisitionNode = new RequisitionNode()
+    // Set node label and foreign ID for the node
+    requisitionNode.setNodeLabel(result.name)
+    requisitionNode.setForeignId(result.name)
+
+    logger.info('Grabbing facts for: ' + result.name);
+
+    def factlist = getFactsList(result.id)
+    def aResult = factlist.results.get(result.name);
+
+    // create interface
+    RequisitionInterface requisitionInterface = new RequisitionInterface();
+    def primaryFactIp = aResult.get("networking::primary")
+    def ipFactString = 'networking::interfaces::' + primaryFactIp + '::ip'
+    requisitionInterface.setIpAddr(aResult.get(ipFactString));
+    requisitionInterface.setSnmpPrimary(PrimaryType.PRIMARY);
+    requisitionNode.getInterfaces().add(requisitionInterface);
+
+    // Create asset list
+    List<RequisitionAsset> assetList = new ArrayList<RequisitionAsset>()
+    RequisitionAsset assetCpu = new RequisitionAsset()
+    RequisitionAsset assetRam = new RequisitionAsset()
+    RequisitionAsset assetManufacturer = new RequisitionAsset()
+    RequisitionAsset assetProductname = new RequisitionAsset()
+    RequisitionAsset assetSerialnumber = new RequisitionAsset()
+    RequisitionAsset assetOperatingSystem = new RequisitionAsset()
+    RequisitionAsset assetDescription = new RequisitionAsset()
+
+    if (aResult == null) {
+        // Some nodes might not have facts. Generating a log entry
+        logger.info("no facts for: " + result.name)
+        return;
+    }
+    // fill asset fields. In case something is empty, "Not specified" will be set
+    assetCpu.setName("cpu")
+    assetCpu.setValue(valueOrNotSpecified(aResult.get("processor0")));
+
+    assetRam.setName("ram")
+    assetRam.setValue(valueOrNotSpecified(aResult.get("memorysize")));
+
+    assetManufacturer.setName("manufacturer")
+    assetManufacturer.setValue(valueOrNotSpecified(aResult.get("manufacturer")));
+
+    assetProductname.setName("productname")
+    assetProductname.setValue(valueOrNotSpecified(aResult.get("productname")));
+
+    assetSerialnumber.setName("serialnumber")
+    assetSerialnumber.setValue(valueOrNotSpecified(aResult.get("serialnumber")));
+
+    assetDescription.setName("description")
+    assetDescription.setValue(valueOrNotSpecified(aResult.get("proemion_app")))
+
+    LsbDescription = valueOrNotSpecified(aResult.get("lsbdistdescription"))
+    Kernelrelease = valueOrNotSpecified(aResult.get("kernelrelease"))
+
+    assetOperatingSystem.setName("operatingsystem")
+    assetOperatingSystem.setValue(LsbDescription + ' ' + Kernelrelease)
+
+    // add assets to list
+    assetList.add(assetCpu)
+    assetList.add(assetRam)
+    assetList.add(assetManufacturer)
+    assetList.add(assetProductname)
+    assetList.add(assetSerialnumber)
+    assetList.add(assetOperatingSystem)
+    assetList.add(assetDescription)
+    requisitionNode.getAssets().addAll(assetList)
+
+    // Grabs fact values and uses them for OpenNMS node categories.
+    def catList = getCatList(aResult, "proemion_stack","proemion_umbworld", "is_virtual" );
+
+    requisitionNode.getCategories().addAll(catList);
+    return requisitionNode;
+}
+
+def getFactsList(id) {
+    // Slurps the host facts into an array
+    String facturl = urlbase + 'hosts/' + id + '/facts?per_page=1000'
+    return new JsonSlurper().parseText(request(facturl));
+}
+
+
+return requisition;
